@@ -36,48 +36,77 @@ df_totales <- hojas$hoja1  # Guardar la hoja 1 como dataframe de totales
 
 ## Transposición
 ```{r transposition, message=FALSE, warning=FALSE}
-# Definir los tipos de valores
-tipos_valores <- c("Ventas_Valor", "Vtas_EQ2", "Vtas_Unds", "Precio_EQ2_Promedio",
-                   "Precio_Unds_Promedio", "Ratio_de_Vtas_EQ2_Sin_Pond", "Dist_Num")
+# Definir los tipos de valores (7 bloques)
+tipos_valores <- c(
+  "Ventas_Valor", 
+  "Vtas_EQ2", 
+  "Vtas_Unds", 
+  "Precio_EQ2_Promedio",
+  "Precio_Unds_Promedio", 
+  "Ratio_de_Vtas_EQ2_Sin_Pond", 
+  "Dist_Num"
+)
 
 # Identificar las primeras 5 columnas que contienen información fija
 columnas_fijas <- names(df_detalle)[1:5]
 
-# Extraer y limpiar los nombres de las columnas desde la 6 en adelante
+# Extraer y limpiar los nombres de las columnas (desde la 6 hasta el final)
 nombres_columnas_originales <- names(df_detalle)[6:length(names(df_detalle))]
-nombres_limpios <- str_remove(nombres_columnas_originales, "\\.\\.\\..*")  # Elimina sufijos numéricos
+nombres_limpios <- str_remove(nombres_columnas_originales, "\\.\\.\\..*")  # elimina sufijos
 
-# Asignar tipos de valores en el orden correcto (cada 7 columnas)
-nombres_finales <- rep(nombres_limpios[seq(1, length(nombres_limpios), 7)], each = 7)
-nombres_finales <- paste0(nombres_finales, "_", rep(tipos_valores, times = length(nombres_finales) / 7))
+# Comprobamos que sean 7 bloques de 37 columnas = 259
+num_blocks <- length(tipos_valores)   # 7
+block_size <- length(nombres_limpios) / num_blocks  # debería dar 37
+
+if (block_size %% 1 != 0) {
+  stop("Las columnas no coinciden con 7 bloques de 37 períodos. Verifica tu archivo.")
+}
+
+# Crear un vector para los nuevos nombres (tendrá la misma longitud que nombres_limpios)
+nombres_finales <- character(length(nombres_limpios))
+
+# Rellenar nombres_finales por bloques
+for (i in seq_len(num_blocks)) {
+  ini <- (i - 1) * block_size + 1
+  fin <- i * block_size
+  
+  # “tipo” = el bloque (Ventas_Valor, Vtas_EQ2, etc.)
+  tipo <- tipos_valores[i]
+  
+  # Extraer los nombres de período que corresponden a este bloque
+  periodos_bloque <- nombres_limpios[ini:fin]
+  
+  # Construir algo como "Dic21_Ventas_Valor"
+  nombres_finales[ini:fin] <- paste0(periodos_bloque, "_", tipo)
+}
 
 # Asignar los nuevos nombres de columna
 names(df_detalle)[6:length(names(df_detalle))] <- nombres_finales
 names(df_totales)[6:length(names(df_totales))] <- nombres_finales
 
-# Convertir a formato largo (pivot_longer)
+# Ahora sí pivot_longer
 df_detalle_long <- df_detalle %>%
-  pivot_longer(cols = -all_of(columnas_fijas),
-               names_to = c("Periodo", "Tipo"),
-               names_pattern = "(.+?)_(.+)",
-               values_to = "Valor")
+  pivot_longer(
+    cols = -all_of(columnas_fijas),
+    names_to   = c("Periodo", "Tipo"),
+    names_pattern = "(.+?)_(.+)",
+    values_to  = "Valor"
+  )
 
 df_totales_long <- df_totales %>%
-  pivot_longer(cols = -all_of(columnas_fijas),
-               names_to = c("Periodo", "Tipo"),
-               names_pattern = "(.+?)_(.+)",
-               values_to = "Valor")
+  pivot_longer(
+    cols = -all_of(columnas_fijas),
+    names_to   = c("Periodo", "Tipo"),
+    names_pattern = "(.+?)_(.+)",
+    values_to  = "Valor"
+  )
 
-# 🔹 ELIMINAR DUPLICADOS SOLO EN df_detalle_long 🔹
+# (Si no esperas duplicados, no hace falta agrupar con first(Valor), pero puedes dejarlo si quieres)
 df_detalle_long <- df_detalle_long %>%
   group_by(across(c(all_of(columnas_fijas), Periodo, Tipo))) %>%
   summarize(Valor = first(Valor), .groups = "drop")
 
-# 🔹 EXTRAER VALORES ESCALARES EN df_totales_long 🔹
-df_totales_long <- df_totales_long %>%
-  mutate(Valor = map_dbl(Valor, ~ ifelse(is.list(.x), as.numeric(unlist(.x)[1]), as.numeric(.x))))  # Extrae el primer valor
-
-# Convertir a formato ancho (pivot_wider) para crear las 7 columnas de tipos de valores
+# Convertir a ancho para que cada fila tenga 7 métricas distintas
 bebidas_detalles <- df_detalle_long %>%
   pivot_wider(names_from = Tipo, values_from = Valor)
 
