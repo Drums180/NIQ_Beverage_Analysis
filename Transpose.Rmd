@@ -120,12 +120,15 @@ bebidas_totales <- bebidas_totales %>%
 # 🔹 REEMPLAZAR NA CON 0 EN bebidas_totales 🔹
 bebidas_totales <- bebidas_totales %>%
   mutate(across(where(is.numeric), ~ replace_na(.x, 0)))  # Reemplaza NA con 0
+
+bebidas_detalles <- bebidas_detalles %>%
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0)))  # Reemplaza NA con 0
 ```
 
 ```{r}
 # Mostrar las primeras filas para verificar
-head(bebidas_detalles)
-head(bebidas_totales)
+tail(bebidas_detalles)
+tail(bebidas_totales)
 ```
 
 ## Summary
