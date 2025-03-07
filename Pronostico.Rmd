@@ -1,0 +1,583 @@
+---
+title: "Pronóstico de Colas y Bebidas"
+author: "David Dominguez"
+date: "2025-03-06"
+output: html_document
+---
+
+## Libraries
+
+```{r librerias, message=FALSE, warning=FALSE}
+library(dplyr)
+library(readr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(ggplot2)
+library(corrplot)
+library(tseries)
+library(forecast)
+library(vars)
+library(scales) 
+```
+
+## Datasets
+
+```{r pressure, message=FALSE, warning=FALSE, include=FALSE}
+## Datasets
+
+# Definir la ruta del archivo
+file_path <- "Databases/Clean_NIQ_DB/"
+
+# Lista de nombres de archivos a cargar
+files <- c("BNA_DR.csv", "BNA_DT.csv", "BNA_TR.csv", "BNA_TT.csv")
+
+# Leer cada archivo y almacenarlo en una lista
+datasets <- map(files, ~ read_csv(file.path(file_path, .x)))
+
+# Asignar cada dataframe a variables individuales
+BNA_DR <- datasets[[1]]
+BNA_DT <- datasets[[2]]
+BNA_TR <- datasets[[3]]
+BNA_TT <- datasets[[4]]
+```
+
+
+## Cleaning
+```{r}
+datasets <- list(BNA_DR, BNA_DT, BNA_TR, BNA_TT)
+
+datasets <- map(datasets, ~ .x %>%
+  # Eliminar columna "...1"
+  dplyr::select(-"...1") %>%
+  # Añadir '_' antes de mayúsculas y convertir a minúsculas
+  rename_with(~ .x %>%
+                str_replace_all("([a-z])([A-Z])", "\\1_\\2") %>%
+                str_replace_all(" ", "_") %>%
+                tolower())
+)
+
+# Actualizar datasets originales
+BNA_DR <- datasets[[1]]
+BNA_DT <- datasets[[2]]
+BNA_TR <- datasets[[3]]
+BNA_TT <- datasets[[4]]
+```
+
+
+## Exploration - BNA_TT
+
+```{r analisis numerico}
+summary(BNA_TT)
+```
+
+```{r analisis texto}
+BNA_TT %>%
+  dplyr::select(where(is.character)) %>%
+  map(~ unique(.x))
+```
+
+```{r analisis univariado}
+BNA_TT %>%
+  group_by(periodo) %>%
+  summarise(promedio_ventas_unds = mean(ventas_unds, na.rm = TRUE)) %>%
+  ggplot(aes(x = periodo, y = promedio_ventas_unds, group = 1)) +
+  
+  # Línea más delgada y con un color más suave
+  geom_line(color = "#0073C2", size = 1) +
+  
+  # Puntos destacados con mayor contraste
+  geom_point(color = "#005B96", size = 3) +
+  
+  # Etiquetas de la gráfica con una fuente clara y fondo blanco
+  labs(
+    title = "Periodo vs Promedio de Ventas",
+    x = "Periodo",
+    y = "Promedio de Ventas (unds)"
+  ) +
+  
+  # Tema minimalista mejorado
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  
+  # Eliminar líneas de la cuadrícula y personalizar el fondo
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333")
+  ) +
+  
+  # Formato del eje X con fechas abreviadas si "periodo" es una fecha
+  scale_x_date(date_labels = "%b %y", date_breaks = "4 months") +
+  
+  # Formato del eje Y en miles para simplificar la visualización
+  scale_y_continuous(labels = scales::label_number(scale = 1e-3, suffix = "k"))
+```
+
+```{r analisis bivariado}
+BNA_TT %>%
+  group_by(periodo, tipo) %>%
+  summarise(promedio_ventas_unds = mean(ventas_unds, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = periodo, y = promedio_ventas_unds, color = tipo, group = tipo)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Periodo vs Promedio de ventas_unds por Tipo",
+    x = "Periodo",
+    y = "Promedio de Ventas (unds)",
+    color = "Tipo"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Obtener niveles únicos de m.presentacion
+presentaciones <- unique(BNA_TT$m.presentacion)
+
+# Crear gráficas separadas por cada m.presentacion con colores personalizados
+plots <- map(presentaciones, function(presentacion_actual) {
+  BNA_TT %>%
+    filter(m.presentacion == presentacion_actual) %>%
+    group_by(periodo, tipo) %>%
+    summarise(promedio_ventas_unds = mean(ventas_unds, na.rm = TRUE), .groups = "drop") %>%
+    ggplot(aes(x = periodo, y = promedio_ventas_unds, color = tipo, group = tipo)) +
+    
+    # Líneas y puntos con colores personalizados
+    geom_line(size = 1.2) +
+    geom_point(size = 3) +
+    
+    # Etiquetas y título
+    labs(
+      title = paste("Periodo vs Promedio de Ventas por Tipo:", presentacion_actual),
+      x = "Periodo",
+      y = "Promedio de Ventas (unds)",
+      color = "Tipo"
+    ) +
+    
+    # Tema minimalista y limpio
+    theme_minimal(base_size = 14, base_family = "Georgia") +
+    
+    # Personalización de colores
+    scale_color_manual(values = c("COLA" = "#2c6df6", "Sabores" = "#ef5f17")) +
+    
+    # Estilo del gráfico sin grid lines y con fondo blanco
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5, color = "#333333"),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333"),
+      legend.position = "top"
+    ) +
+    
+    # Eje X con formato abreviado para las fechas (si aplica)
+    scale_x_date(date_labels = "%b %y", date_breaks = "4 months")
+})
+
+# Mostrar las gráficas individualmente
+plots
+```
+
+```{r}
+# Filtrar solo para "MULTI-PACK" y crear la gráfica
+BNA_TT %>%
+  filter(m.presentacion == "MULTI-PACK") %>%
+  group_by(periodo, tipo) %>%
+  summarise(promedio_ventas_unds = mean(ventas_unds, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = periodo, y = promedio_ventas_unds, color = tipo, group = tipo)) +
+  
+  # Líneas y puntos con colores personalizados
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  
+  # Etiquetas y título
+  labs(
+    title = "Periodo vs Promedio de Ventas por Categoría: MULTI-PACK",
+    x = "Periodo",
+    y = "Promedio de Ventas (unds)",
+    color = "Tipo"
+  ) +
+  
+  # Tema minimalista y limpio
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  
+  # Personalización de colores
+  scale_color_manual(values = c("COLA" = "#2c6df6", "Sabores" = "#ef5f17")) +
+  
+  # Estilo del gráfico sin grid lines y con fondo blanco
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "top"
+  ) +
+  
+  # Eje X con formato abreviado para las fechas
+  scale_x_date(date_labels = "%b %y", date_breaks = "4 months")
+```
+
+
+```{r analisis bivariado}
+# Generar matriz de correlación
+cor_matrix <- BNA_TT %>%
+  dplyr::select(where(is.numeric)) %>%
+  cor(use = "complete.obs")
+
+# Visualizar matriz de correlación
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper", 
+         addCoef.col = "black", 
+         tl.col = "black",
+         number.cex = 0.8,
+         diag = FALSE,
+         title = "Matriz de Correlación - Variables Numéricas",
+         mar = c(0,0,1,0))
+```
+
+```{r}
+# Obtener niveles únicos de m.presentacion
+presentaciones <- unique(BNA_TT$m.presentacion)
+
+# Generar una gráfica separada por cada m.presentacion
+plots <- map(presentaciones, function(presentacion_actual) {
+  BNA_TT %>%
+    filter(m.presentacion == presentacion_actual) %>%
+    ggplot(aes(x = precio_unds, y = ventas_unds, color = tipo)) +
+    geom_point(alpha = 0.6) +
+    labs(
+      title = paste("Relación dentro de :", presentacion_actual),
+      x = "Precio (unidad)",
+      y = "Ventas (unidades)",
+      color = "Tipo"
+    ) +
+    theme_minimal()
+})
+
+# Mostrar las gráficas individualmente
+plots
+```
+
+
+## Propuestas de Pronostico 
+
+### Preparación de Data
+```{r type split}
+# Crear dataset solo para 'COLA'
+BNA_COLA <- BNA_TT %>%
+  filter(tipo == "COLA")
+
+# Crear dataset para tipo diferente de COLA (por ejemplo BEBIDAS)
+BNA_BEBIDAS <- BNA_TT %>%
+  filter(tipo != "COLA")
+```
+
+```{r}
+# COLA promedio por periodo
+BNA_COLA_TS <- BNA_COLA %>%
+  group_by(periodo) %>%
+  summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE))) %>%
+  arrange(periodo)
+
+# BEBIDAS promedio por periodo
+BNA_BEBIDAS_TS <- BNA_BEBIDAS %>%
+  group_by(periodo) %>%
+  summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE))) %>%
+  arrange(periodo)
+```
+
+```{r}
+# Base diferenciada COLA
+BNA_COLA_DIFF <- BNA_COLA_TS %>%
+  mutate(across(where(is.numeric), ~ c(NA, diff(.x)))) %>%
+  drop_na()
+
+# Base diferenciada BEBIDAS
+BNA_BEBIDAS_DIFF <- BNA_BEBIDAS_TS %>%
+  mutate(across(where(is.numeric), ~ c(NA, diff(.x)))) %>%
+  drop_na()
+```
+
+```{r}
+# Obtener categorías únicas de m.presentacion
+categorias <- unique(BNA_TT$m.presentacion)
+
+# Bases separadas para COLA por m.presentacion
+BNA_COLA_PRES <- map(categorias, function(pres) {
+  BNA_COLA %>%
+    filter(m.presentacion == pres) %>%
+    group_by(periodo) %>%
+    summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE))) %>%
+    arrange(periodo)
+})
+names(BNA_COLA_PRES) <- categorias
+
+# Bases separadas para BEBIDAS por m.presentacion
+BNA_BEBIDAS_PRES <- map(categorias, function(pres) {
+  BNA_BEBIDAS %>%
+    filter(m.presentacion == pres) %>%
+    group_by(periodo) %>%
+    summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE))) %>%
+    arrange(periodo)
+})
+names(BNA_BEBIDAS_PRES) <- categorias
+```
+
+### Pruebas de Diagnostico
+
+#### Estacionariedad
+```{r stationarity}
+# COLA - prueba Dickey-Fuller
+adf_cola <- adf.test(BNA_COLA_TS$ventas_unds, alternative = "stationary")
+
+# BEBIDAS - prueba Dickey-Fuller
+adf_bebidas <- adf.test(BNA_BEBIDAS_TS %>% pull(ventas_unds), alternative = "stationary")
+
+# Mostrar resultados
+adf_cola
+adf_bebidas
+```
+
+#### Auto Correlación
+```{r autocorrelation}
+# Crear series temporales correctamente agregadas
+cola_ts <- ts(BNA_COLA_TS$ventas_unds)
+bebidas_ts <- ts(BNA_BEBIDAS_TS$ventas_unds)
+
+# Prueba Ljung-Box para COLA
+ljung_cola <- Box.test(cola_ts, lag = 12, type = "Ljung-Box")
+
+# Prueba Ljung-Box para BEBIDAS
+ljung_bebidas <- Box.test(bebidas_ts, lag = 12, type = "Ljung-Box")
+
+# Mostrar resultados
+ljung_cola
+ljung_bebidas
+```
+### Tratamiento
+
+```{r stationarity treatment}
+# COLA - prueba Dickey-Fuller
+adf_cola <- adf.test(BNA_COLA_DIFF$ventas_unds, alternative = "stationary")
+
+# BEBIDAS - prueba Dickey-Fuller
+adf_bebidas <- adf.test(BNA_BEBIDAS_DIFF %>% pull(ventas_unds), alternative = "stationary")
+
+# Mostrar resultados
+adf_cola
+adf_bebidas
+```
+
+```{r autocorrelation treatment}
+# Crear series temporales correctamente agregadas
+cola_ts <- ts(BNA_COLA_DIFF$ventas_unds)
+bebidas_ts <- ts(BNA_BEBIDAS_DIFF$ventas_unds)
+
+# Prueba Ljung-Box para COLA
+ljung_cola <- Box.test(cola_ts, lag = 12, type = "Ljung-Box")
+
+# Prueba Ljung-Box para BEBIDAS
+ljung_bebidas <- Box.test(bebidas_ts, lag = 12, type = "Ljung-Box")
+
+# Mostrar resultados
+ljung_cola
+ljung_bebidas
+```
+
+### Modelos
+
+#### Modelo ARMA
+```{r arma with stationary data}
+# ARMA(1,0,1) para COLA (datos diferenciados)
+arma_cola <- Arima(BNA_COLA_DIFF$ventas_unds, order = c(1, 0, 1))
+summary(arma_cola)
+
+# ARMA(1,0,1) para BEBIDAS (datos diferenciados)
+arma_bebidas <- Arima(BNA_BEBIDAS_DIFF$ventas_unds, order = c(1, 0, 1))
+summary(arma_bebidas)
+```
+
+```{r arma with stationary data for each presentation}
+# ARMA(1,0,q) para COLA (por m.presentacion)
+arma_cola_presentacion <- list(
+  "INDIVIDUAL" = Arima(diff(ts(BNA_COLA_PRES[["INDIVIDUAL"]]$ventas_unds)), order = c(1,0,0)),
+  "MULTI-PACK" = Arima(diff(ts(BNA_COLA_PRES[["MULTI-PACK"]]$ventas_unds)), order = c(1,0,2)),
+  "MULTI-PACK CRUZADO" = Arima(diff(ts(BNA_COLA_PRES[["MULTI-PACK CRUZADO"]]$ventas_unds)), order = c(1,0,1)),
+  "PACK" = Arima(diff(ts(BNA_COLA_PRES[["PACK"]]$ventas_unds)), order = c(1,0,0))
+)
+
+# Resúmenes modelos ARMA COLA
+map(arma_cola_presentacion, summary)
+
+# ARMA(1,0,q) para BEBIDAS (por m.presentacion)
+arma_bebidas_presentacion <- list(
+  "INDIVIDUAL" = Arima(diff(ts(BNA_BEBIDAS_PRES[["INDIVIDUAL"]]$ventas_unds)), order = c(1,0,0)),
+  "MULTI-PACK" = Arima(diff(ts(BNA_BEBIDAS_PRES[["MULTI-PACK"]]$ventas_unds)), order = c(1,0,2)),
+  "MULTI-PACK CRUZADO" = Arima(diff(ts(BNA_BEBIDAS_PRES[["MULTI-PACK CRUZADO"]]$ventas_unds)), order = c(1,0,1)),
+  "PACK" = Arima(diff(ts(BNA_BEBIDAS_PRES[["PACK"]]$ventas_unds)), order = c(1,0,2))
+)
+
+# Resúmenes modelos ARMA BEBIDAS
+map(arma_bebidas_presentacion, summary)
+```
+
+#### Modelo ARIMA
+```{r arima with non-stationary data}
+# ARIMA(1,1,1) para COLA
+arima_cola <- Arima(BNA_COLA_TS$ventas_unds, order = c(4,1,1))
+summary(arima_cola)
+
+# ARIMA(1,1,1) para BEBIDAS
+arima_bebidas <- Arima(BNA_BEBIDAS_TS$ventas_unds, order = c(4,1,1))
+summary(arima_bebidas)
+```
+
+#### Modelo VAR
+```{r var model with stationary data (using precio_unds and having ventas_unds as response)}
+# Modelo VAR para COLA con datos diferenciados
+data_var_cola <- BNA_COLA_TS %>%
+  dplyr::select(ventas_unds, precio_unds)
+
+var_cola <- VAR(data_var_cola, p = 1, type = "const")
+summary(var_cola)
+
+# Modelo VAR para BEBIDAS con datos diferenciados
+data_var_bebidas <- BNA_BEBIDAS_TS %>%
+  dplyr::select(ventas_unds, precio_unds)
+
+var_bebidas <- VAR(data_var_bebidas, p = 1, type = "const")
+summary(var_bebidas)
+```
+
+### Pronostico
+```{r forecast, warning=FALSE}
+# Pronóstico ARIMA para COLA (5 periodos adelante)
+forecast_arima_cola <- forecast(arima_cola, h = 5)
+forecast_arima_cola
+
+# Pronóstico ARIMA para BEBIDAS (5 periodos adelante)
+forecast_arima_bebidas <- forecast(arima_bebidas, h = 5)
+forecast_arima_bebidas
+```
+
+```{r graph forecast}
+# Gráfica Pronóstico ARIMA - COLA
+autoplot(forecast_arima_cola) +
+  labs(
+    title = "Pronóstico ARIMA (4,1,1) - Ventas COLA",
+    x = "Periodo",
+    y = "Ventas (unds)"
+  ) +
+  theme_minimal()
+
+# Gráfica Pronóstico ARIMA - BEBIDAS
+autoplot(forecast_arima_bebidas) +
+  labs(
+    title = "Pronóstico ARIMA (4,1,1) - Ventas BEBIDAS",
+    x = "Periodo",
+    y = "Ventas (unds)"
+  ) +
+  theme_minimal()
+```
+
+```{r mutual forecast}
+# Filtrar de 2024 en adelante y añadir intervalos de confianza
+
+# Primero, generar dataframe histórico combinado
+historico <- bind_rows(
+  BNA_COLA_TS %>% mutate(tipo = "Colas"),
+  BNA_BEBIDAS_TS %>% mutate(tipo = "Sabores")
+) %>% 
+  dplyr::select(periodo, ventas_unds, tipo) %>%
+  filter(as.Date(periodo) >= as.Date("2023-01-01")) # Filtrar solo periodos desde 2024 en adelante
+
+# Asegurarse de que el periodo sea de tipo Date
+historico$periodo <- as.Date(historico$periodo)
+
+# Generar dataframe de pronóstico con intervalos de confianza
+# Si el periodo es una fecha, utilizar seq.Date en lugar de seq
+periodos_futuro <- seq(max(historico$periodo) + 1, by = "month", length.out = 5)
+
+pronostico <- bind_rows(
+  data.frame(
+    periodo = periodos_futuro,
+    ventas_unds = as.numeric(forecast_arima_cola$mean),
+    lower = as.numeric(forecast_arima_cola$lower[, 2]),
+    upper = as.numeric(forecast_arima_cola$upper[, 2]),
+    tipo = "Colas"
+  ),
+  data.frame(
+    periodo = periodos_futuro,
+    ventas_unds = as.numeric(forecast_arima_bebidas$mean),
+    lower = as.numeric(forecast_arima_bebidas$lower[, 2]),
+    upper = as.numeric(forecast_arima_bebidas$upper[, 2]),
+    tipo = "Sabores"
+  )
+)
+
+# Gráfica combinada con intervalos de confianza y filtro desde 2024
+ggplot() +
+  # Datos históricos filtrados
+  geom_line(data = historico, aes(x = periodo, y = ventas_unds, color = tipo), size = 1) +
+  geom_point(data = historico, aes(x = periodo, y = ventas_unds, color = tipo), size = 2.5) +
+  
+  # Pronóstico con líneas punteadas
+  geom_line(data = pronostico, aes(x = periodo, y = ventas_unds, color = tipo), 
+            size = 1, linetype = "dashed") +
+  geom_point(data = pronostico, aes(x = periodo, y = ventas_unds, color = tipo), 
+             shape = 17, size = 3) +
+  
+  # Intervalos de confianza
+  geom_ribbon(data = pronostico, aes(x = periodo, ymin = lower, ymax = upper, fill = tipo), 
+              alpha = 0.1) +
+  
+  # Etiquetas y tema
+  labs(
+    title = "Historial y Pronóstico de Ventas por Categoría",
+    subtitle = "Comparativa entre Colas y Sabores desde 2023 en adelante",
+    x = "Periodo",
+    y = "Ventas (Millones de Unidades)",
+    color = "Tipo",
+    fill = "Tipo"
+  ) +
+  
+  # Personalización del tema
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  
+  # Eliminar grid lines y fondo blanco
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    plot.subtitle = element_text(size = 14, hjust = 0.5, color = "#666666"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "top",
+    legend.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  
+  # Formato del eje Y en millones
+  scale_y_continuous(labels = scales::label_number(scale = 1e-6, suffix = "M")) +
+  
+  # Formato del eje X cada 4 meses con fechas abreviadas
+  scale_x_date(date_labels = "%b %y", date_breaks = "4 months") +
+  
+  # Colores personalizados para las líneas y el relleno
+  scale_color_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17")) +
+  scale_fill_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17"))
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
