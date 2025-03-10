@@ -5,7 +5,9 @@ date: "2025-03-06"
 output: html_document
 ---
 
-## Libraries
+## Analisis Predictivo : Fase I
+
+### Libraries
 
 ```{r librerias, message=FALSE, warning=FALSE}
 library(dplyr)
@@ -21,7 +23,7 @@ library(vars)
 library(scales) 
 ```
 
-## Datasets
+### Datasets
 
 ```{r pressure, message=FALSE, warning=FALSE, include=FALSE}
 ## Datasets
@@ -43,7 +45,7 @@ BNA_TT <- datasets[[4]]
 ```
 
 
-## Cleaning
+### Cleaning
 ```{r}
 datasets <- list(BNA_DR, BNA_DT, BNA_TR, BNA_TT)
 
@@ -65,7 +67,7 @@ BNA_TT <- datasets[[4]]
 ```
 
 
-## Exploration - BNA_TT
+### Exploration - BNA_TT
 
 ```{r analisis numerico}
 summary(BNA_TT)
@@ -114,7 +116,7 @@ BNA_TT %>%
   scale_x_date(date_labels = "%b %y", date_breaks = "4 months") +
   
   # Formato del eje Y en miles para simplificar la visualización
-  scale_y_continuous(labels = scales::label_number(scale = 1e-3, suffix = "k"))
+  scale_y_continuous(labels = scales::label_number(scale = 1e-6, suffix = "M"))
 ```
 
 ```{r analisis bivariado}
@@ -222,7 +224,9 @@ BNA_TT %>%
   ) +
   
   # Eje X con formato abreviado para las fechas
-  scale_x_date(date_labels = "%b %y", date_breaks = "4 months")
+  scale_x_date(date_labels = "%b %y", date_breaks = "4 months") +
+# Formato del eje Y en miles para simplificar la visualización
+  scale_y_continuous(labels = scales::label_number(scale = 1e-6, suffix = "M"))
 ```
 
 
@@ -268,9 +272,9 @@ plots
 ```
 
 
-## Propuestas de Pronostico 
+### Propuestas de Pronostico 
 
-### Preparación de Data
+#### Preparación de Data
 ```{r type split}
 # Crear dataset solo para 'COLA'
 BNA_COLA <- BNA_TT %>%
@@ -332,9 +336,9 @@ BNA_BEBIDAS_PRES <- map(categorias, function(pres) {
 names(BNA_BEBIDAS_PRES) <- categorias
 ```
 
-### Pruebas de Diagnostico
+#### Pruebas de Diagnostico
 
-#### Estacionariedad
+##### Estacionariedad
 ```{r stationarity}
 # COLA - prueba Dickey-Fuller
 adf_cola <- adf.test(BNA_COLA_TS$ventas_unds, alternative = "stationary")
@@ -347,7 +351,7 @@ adf_cola
 adf_bebidas
 ```
 
-#### Auto Correlación
+##### Auto Correlación
 ```{r autocorrelation}
 # Crear series temporales correctamente agregadas
 cola_ts <- ts(BNA_COLA_TS$ventas_unds)
@@ -363,7 +367,7 @@ ljung_bebidas <- Box.test(bebidas_ts, lag = 12, type = "Ljung-Box")
 ljung_cola
 ljung_bebidas
 ```
-### Tratamiento
+#### Tratamiento
 
 ```{r stationarity treatment}
 # COLA - prueba Dickey-Fuller
@@ -393,9 +397,9 @@ ljung_cola
 ljung_bebidas
 ```
 
-### Modelos
+#### Modelos
 
-#### Modelo ARMA
+##### Modelo ARMA
 ```{r arma with stationary data}
 # ARMA(1,0,1) para COLA (datos diferenciados)
 arma_cola <- Arima(BNA_COLA_DIFF$ventas_unds, order = c(1, 0, 1))
@@ -430,7 +434,7 @@ arma_bebidas_presentacion <- list(
 map(arma_bebidas_presentacion, summary)
 ```
 
-#### Modelo ARIMA
+##### Modelo ARIMA
 ```{r arima with non-stationary data}
 # ARIMA(1,1,1) para COLA
 arima_cola <- Arima(BNA_COLA_TS$ventas_unds, order = c(4,1,1))
@@ -441,7 +445,7 @@ arima_bebidas <- Arima(BNA_BEBIDAS_TS$ventas_unds, order = c(4,1,1))
 summary(arima_bebidas)
 ```
 
-#### Modelo VAR
+##### Modelo VAR
 ```{r var model with stationary data (using precio_unds and having ventas_unds as response)}
 # Modelo VAR para COLA con datos diferenciados
 data_var_cola <- BNA_COLA_TS %>%
@@ -458,14 +462,14 @@ var_bebidas <- VAR(data_var_bebidas, p = 1, type = "const")
 summary(var_bebidas)
 ```
 
-### Pronostico
+#### Pronostico
 ```{r forecast, warning=FALSE}
 # Pronóstico ARIMA para COLA (5 periodos adelante)
-forecast_arima_cola <- forecast(arima_cola, h = 5)
+forecast_arima_cola <- forecast(arima_cola, h = 12)
 forecast_arima_cola
 
 # Pronóstico ARIMA para BEBIDAS (5 periodos adelante)
-forecast_arima_bebidas <- forecast(arima_bebidas, h = 5)
+forecast_arima_bebidas <- forecast(arima_bebidas, h = 12)
 forecast_arima_bebidas
 ```
 
@@ -490,43 +494,46 @@ autoplot(forecast_arima_bebidas) +
 ```
 
 ```{r mutual forecast}
-# Filtrar de 2024 en adelante y añadir intervalos de confianza
+# Filtrar de 2023 en adelante y añadir intervalos de confianza
 
-# Primero, generar dataframe histórico combinado
+# Dataframe histórico desde 2023
 historico <- bind_rows(
   BNA_COLA_TS %>% mutate(tipo = "Colas"),
   BNA_BEBIDAS_TS %>% mutate(tipo = "Sabores")
 ) %>% 
   dplyr::select(periodo, ventas_unds, tipo) %>%
-  filter(as.Date(periodo) >= as.Date("2023-01-01")) # Filtrar solo periodos desde 2024 en adelante
+  filter(as.Date(periodo) >= as.Date("2023-01-01"))
 
 # Asegurarse de que el periodo sea de tipo Date
 historico$periodo <- as.Date(historico$periodo)
 
-# Generar dataframe de pronóstico con intervalos de confianza
-# Si el periodo es una fecha, utilizar seq.Date en lugar de seq
-periodos_futuro <- seq(max(historico$periodo) + 1, by = "month", length.out = 5)
+# Generar dataframe de pronóstico con ambos intervalos de confianza
+periodos_futuro <- seq(max(historico$periodo) + 1, by = "month", length.out = 12)
 
 pronostico <- bind_rows(
   data.frame(
     periodo = periodos_futuro,
     ventas_unds = as.numeric(forecast_arima_cola$mean),
-    lower = as.numeric(forecast_arima_cola$lower[, 2]),
-    upper = as.numeric(forecast_arima_cola$upper[, 2]),
+    lower_80 = as.numeric(forecast_arima_cola$lower[,1]),
+    upper_80 = as.numeric(forecast_arima_cola$upper[,1]),
+    lower_95 = as.numeric(forecast_arima_cola$lower[,2]),
+    upper_95 = as.numeric(forecast_arima_cola$upper[,2]),
     tipo = "Colas"
   ),
   data.frame(
     periodo = periodos_futuro,
     ventas_unds = as.numeric(forecast_arima_bebidas$mean),
-    lower = as.numeric(forecast_arima_bebidas$lower[, 2]),
-    upper = as.numeric(forecast_arima_bebidas$upper[, 2]),
+    lower_80 = as.numeric(forecast_arima_bebidas$lower[,1]),
+    upper_80 = as.numeric(forecast_arima_bebidas$upper[,1]),
+    lower_95 = as.numeric(forecast_arima_bebidas$lower[,2]),
+    upper_95 = as.numeric(forecast_arima_bebidas$upper[,2]),
     tipo = "Sabores"
   )
 )
 
-# Gráfica combinada con intervalos de confianza y filtro desde 2024
+# Gráfica con ambos intervalos de confianza
 ggplot() +
-  # Datos históricos filtrados
+  # Datos históricos
   geom_line(data = historico, aes(x = periodo, y = ventas_unds, color = tipo), size = 1) +
   geom_point(data = historico, aes(x = periodo, y = ventas_unds, color = tipo), size = 2.5) +
   
@@ -536,8 +543,12 @@ ggplot() +
   geom_point(data = pronostico, aes(x = periodo, y = ventas_unds, color = tipo), 
              shape = 17, size = 3) +
   
-  # Intervalos de confianza
-  geom_ribbon(data = pronostico, aes(x = periodo, ymin = lower, ymax = upper, fill = tipo), 
+  # Intervalo de confianza al 80%
+  geom_ribbon(data = pronostico, aes(x = periodo, ymin = lower_80, ymax = upper_80, fill = tipo), 
+              alpha = 0.2) +
+  
+  # Intervalo de confianza al 95%
+  geom_ribbon(data = pronostico, aes(x = periodo, ymin = lower_95, ymax = upper_95, fill = tipo), 
               alpha = 0.1) +
   
   # Etiquetas y tema
@@ -574,10 +585,129 @@ ggplot() +
   # Formato del eje X cada 4 meses con fechas abreviadas
   scale_x_date(date_labels = "%b %y", date_breaks = "4 months") +
   
-  # Colores personalizados para las líneas y el relleno
+  # Colores personalizados
   scale_color_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17")) +
   scale_fill_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17"))
 ```
 
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Analisis Predictivo : Fase II
+
+### Cleaning
+
+```{r limpieza de texto}
+# Limpieza y estandarización de BNA_DR
+BNA_DR <- BNA_DR %>%
+  mutate(
+    # Crear la columna "canal" basado en el valor de "markets"
+    canal = ifelse(grepl("Autoservicios", markets, ignore.case = TRUE), "Autoservicios", "Tradicional"),
+    
+    # Estandarizar la columna "markets" a "Zona 1", "Zona 2", ..., "Zona 6"
+    markets = case_when(
+      grepl("Area 1|AREA I", markets, ignore.case = TRUE) ~ "Zona 1",
+      grepl("Area 2|AREA II", markets, ignore.case = TRUE) ~ "Zona 2",
+      grepl("Area 3|AREA III", markets, ignore.case = TRUE) ~ "Zona 3",
+      grepl("Area 4|AREA IV", markets, ignore.case = TRUE) ~ "Zona 4",
+      grepl("Area 5|AREA V", markets, ignore.case = TRUE) ~ "Zona 5",
+      grepl("Area 6|AREA VI", markets, ignore.case = TRUE) ~ "Zona 6",
+      TRUE ~ markets
+    ),
+    
+    # Estandarizar el formato de "tipo" a "Colas" y "Sabores"
+    tipo = case_when(
+      tipo == "COLA" ~ "Colas",
+      tipo == "Sabores" ~ "Sabores",
+      TRUE ~ tipo
+    )
+  )
+
+# Verificar los valores únicos después de la transformación
+BNA_DR %>%
+  dplyr::select(where(is.character)) %>%
+  map(~ unique(.x))
+```
+
+### Exploration - BNA_DR
+
+```{r analisis numerico}
+summary(BNA_DR)
+```
+
+```{r }
+# Calcular promedio de ventas por periodo, tipo y canal
+data_grafico <- BNA_DR %>%
+  group_by(periodo, tipo, canal) %>%
+  summarise(promedio_ventas_unds = mean(ventas_unds, na.rm = TRUE), .groups = "drop")
+
+# Gráfica de líneas diferenciadas por tipo y canal con escala logarítmica en Y
+ggplot(data_grafico, aes(x = periodo, y = promedio_ventas_unds, 
+                          color = tipo, group = interaction(tipo, canal))) +
+  
+  # Líneas sólidas para todos los grupos
+  geom_line(size = 1) +
+  
+  # Puntos con formas distintas por canal
+  geom_point(aes(shape = canal), size = 3) +
+  
+  # Escala logarítmica en el eje Y y formateo a millones (M)
+  scale_y_log10(labels = scales::label_number(scale = 1e-6, suffix = "M")) +
+  
+  labs(
+    title = "Periodo vs Promedio de Ventas por Tipo y Canal",
+    x = "Periodo",
+    y = "Promedio de Ventas (Millones de Unidades)",
+    color = "Tipo",
+    shape = "Canal"
+  ) +
+  
+  # Colores específicos para cada tipo (2 líneas azules, 2 líneas naranjas)
+  scale_color_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17")) +
+  
+  # Formas específicas para los canales (círculo y cuadrado)
+  scale_shape_manual(values = c("Autoservicios" = 16, "Tradicional" = 15)) +
+  
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  
+  # Personalización del tema
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "top"
+  )
+```
+
+```{r}
+# Calcular la tasa de crecimiento promedio (CAGR) para cada combinación de tipo y canal
+tasa_crecimiento <- data_grafico %>%
+  arrange(periodo) %>%
+  group_by(tipo, canal) %>%
+  summarise(
+    valor_inicial = first(promedio_ventas_unds),
+    valor_final = last(promedio_ventas_unds),
+    n_periodos = n() - 1,
+    tasa_crecimiento_promedio = (valor_final / valor_inicial)^(1 / n_periodos) - 1,
+    .groups = "drop"
+  )
+
+# Convertir la tasa de crecimiento a porcentaje
+tasa_crecimiento <- tasa_crecimiento %>%
+  mutate(tasa_crecimiento_promedio = tasa_crecimiento_promedio * 100) %>%
+  dplyr::select(tipo,canal,tasa_crecimiento_promedio)
+
+# Mostrar las tasas de crecimiento promedio
+print(tasa_crecimiento)
+```
+
+```{r}
+# Calcular la correlación entre el precio y las ventas para cada combinación de canal y tipo
+correlacion_precio_ventas <- BNA_DR %>%
+  group_by(canal, tipo) %>%
+  summarise(correlacion = cor(precio_unds, ventas_unds, use = "complete.obs"), .groups = "drop")
+
+# Mostrar los resultados de la correlación
+print(correlacion_precio_ventas)
+```
+
+
+### Propuestas de Pronostico 
