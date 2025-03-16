@@ -589,9 +589,123 @@ ggplot() +
   scale_color_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17")) +
   scale_fill_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17"))
 ```
+```{r}
+# Generar dataframe histórico combinado
+historico <- bind_rows(
+  BNA_COLA_TS %>% mutate(tipo = "Colas"),
+  BNA_BEBIDAS_TS %>% mutate(tipo = "Sabores")
+) %>% 
+  dplyr::select(periodo, ventas_unds, tipo)
+
+# Asegurarse de que el periodo sea de tipo Date
+historico$periodo <- as.Date(historico$periodo)
+
+# Añadir columnas de año y mes para el análisis Year-Over-Year
+historico <- historico %>%
+  mutate(
+    anio = format(periodo, "%Y"),
+    mes = format(periodo, "%m")
+  )
+
+# Generar dataframe de pronóstico con ambos intervalos de confianza
+periodos_futuro <- seq(max(historico$periodo) + 1, by = "month", length.out = 12)
+
+pronostico <- bind_rows(
+  data.frame(
+    periodo = periodos_futuro,
+    ventas_unds = as.numeric(forecast_arima_cola$mean),
+    lower_80 = as.numeric(forecast_arima_cola$lower[,1]),
+    upper_80 = as.numeric(forecast_arima_cola$upper[,1]),
+    lower_95 = as.numeric(forecast_arima_cola$lower[,2]),
+    upper_95 = as.numeric(forecast_arima_cola$upper[,2]),
+    tipo = "Colas",
+    anio = "2025",
+    mes = format(periodos_futuro, "%m")
+  ),
+  data.frame(
+    periodo = periodos_futuro,
+    ventas_unds = as.numeric(forecast_arima_bebidas$mean),
+    lower_80 = as.numeric(forecast_arima_bebidas$lower[,1]),
+    upper_80 = as.numeric(forecast_arima_bebidas$upper[,1]),
+    lower_95 = as.numeric(forecast_arima_bebidas$lower[,2]),
+    upper_95 = as.numeric(forecast_arima_bebidas$upper[,2]),
+    tipo = "Sabores",
+    anio = "2025",
+    mes = format(periodos_futuro, "%m")
+  )
+)
+
+# Crear función para graficar Year-Over-Year
+plot_yoy <- function(data, tipo_producto, color) {
+  
+  # Filtrar datos históricos y pronóstico
+  historico_data <- data %>%
+    filter(tipo == tipo_producto)
+  
+  pronostico_data <- pronostico %>%
+    filter(tipo == tipo_producto)
+  
+  # Colores de escala de grises para años pasados
+  anios_historicos <- unique(historico_data$anio)
+  escala_grises <- scales::seq_gradient_pal("lightgrey", "black", "Lab")(seq(0, 1, length.out = length(anios_historicos)))
+  names(escala_grises) <- anios_historicos
+  
+  ggplot() +
+    # Datos históricos en diferentes tonos de gris
+    geom_line(data = historico_data, aes(x = as.numeric(mes), y = ventas_unds, group = anio, color = anio), size = 1, alpha = 0.6) +
+    scale_color_manual(values = escala_grises, guide = "none") +
+    
+    # Pronóstico en color fuerte
+    geom_line(data = pronostico_data, aes(x = as.numeric(mes), y = ventas_unds), color = color, size = 1.5, linetype = "solid") +
+    
+    # Intervalos de confianza
+    geom_ribbon(data = pronostico_data, aes(x = as.numeric(mes), ymin = lower_80, ymax = upper_80), fill = color, alpha = 0.2) +
+    geom_ribbon(data = pronostico_data, aes(x = as.numeric(mes), ymin = lower_95, ymax = upper_95), fill = color, alpha = 0.1) +
+    
+    # Etiquetas y tema
+    labs(
+      title = paste("Ventas YoY -", tipo_producto),
+      x = "Mes",
+      y = "Ventas (Millones de Unidades)"
+    ) +
+    
+    # Personalización del tema
+    theme_minimal(base_size = 14, base_family = "Georgia") +
+    theme(
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333")
+    ) +
+    
+    # Formato del eje Y en millones y eje X en meses
+    scale_y_continuous(labels = scales::label_number(scale = 1e-6, suffix = "M")) +
+    scale_x_continuous(breaks = 1:12, labels = month.abb) +
+    
+    # Límites del eje X
+    expand_limits(x = c(1, 12))
+}
+
+# Generar gráficos para Colas y Sabores
+plot_yoy(historico, "Colas", "#2c6df6")
+plot_yoy(historico, "Sabores", "#ef5f17")
+```
 
 
 # Analisis Predictivo : Fase II
+
+### Dataset Detail
+
+```{r}
+bebidas_detalles <- read_csv("Databases/Clean_NIQ_DB/bebidas_detalles.csv")
+
+bebidas_detalles <- 
+    subset(bebidas_detalles, CATEGORIA == "REFRESCOS") %>%
+  mutate(Tipo = ifelse(M.SABOR == 'COLA', 'Colas', 'Sabores'))
+```
 
 ### Cleaning
 
@@ -604,14 +718,14 @@ BNA_DR <- BNA_DR %>%
     
     # Estandarizar la columna "markets" a "Zona 1", "Zona 2", ..., "Zona 6"
     markets = case_when(
-      grepl("Area 1|AREA I", markets, ignore.case = TRUE) ~ "Zona 1",
-      grepl("Area 2|AREA II", markets, ignore.case = TRUE) ~ "Zona 2",
-      grepl("Area 3|AREA III", markets, ignore.case = TRUE) ~ "Zona 3",
-      grepl("Area 4|AREA IV", markets, ignore.case = TRUE) ~ "Zona 4",
-      grepl("Area 5|AREA V", markets, ignore.case = TRUE) ~ "Zona 5",
-      grepl("Area 6|AREA VI", markets, ignore.case = TRUE) ~ "Zona 6",
-      TRUE ~ markets
-    ),
+  grepl("Area 1_MT$|AREA I$", markets, ignore.case = TRUE) ~ "Zona 1",
+  grepl("Area 2_MT$|AREA II$", markets, ignore.case = TRUE) ~ "Zona 2",
+  grepl("Area 3_MT$|AREA III$", markets, ignore.case = TRUE) ~ "Zona 3",
+  grepl("Area 4_MT$|AREA IV$", markets, ignore.case = TRUE) ~ "Zona 4",
+  grepl("Area 5_MT$|AREA V$", markets, ignore.case = TRUE) ~ "Zona 5",
+  grepl("Area 6_MT$|AREA VI$", markets, ignore.case = TRUE) ~ "Zona 6",
+  TRUE ~ markets
+),
     
     # Estandarizar el formato de "tipo" a "Colas" y "Sabores"
     tipo = case_when(
@@ -626,6 +740,131 @@ BNA_DR %>%
   dplyr::select(where(is.character)) %>%
   map(~ unique(.x))
 ```
+
+```{r}
+# Limpieza y estandarización de bebidas_detalles
+bebidas_detalles <- bebidas_detalles %>%
+  # Eliminar la primera columna si es irrelevante
+  dplyr::select(-1) %>%
+  
+  # Estandarización de nombres de columnas: minúsculas y guiones bajos
+  rename_with(~ .x %>%
+                str_replace_all("([a-z])([A-Z])", "\\1_\\2") %>%
+                str_replace_all(" ", "_") %>%
+                tolower()) %>%
+  
+  # Eliminar registros con NA en la columna "canasto"
+  drop_na(canasto) %>%
+  
+  # Filtrar registros no deseados en la columna "markets"
+  filter(!markets %in% c("Autoservicios Total Mexico_MT", "TOTAL MEXICO TRAD + MINIS")) %>%
+  
+  # Crear la columna "canal" basado en el valor de "markets"
+  mutate(
+    canal = ifelse(grepl("autoservicios", markets, ignore.case = TRUE), "Autoservicios", "Tradicional"),
+    
+    # Estandarizar la columna "markets" a "Zona 1" a "Zona 6"
+    markets = case_when(
+  grepl("Area 1_MT$|AREA I$", markets, ignore.case = TRUE) ~ "Zona 1",
+  grepl("Area 2_MT$|AREA II$", markets, ignore.case = TRUE) ~ "Zona 2",
+  grepl("Area 3_MT$|AREA III$", markets, ignore.case = TRUE) ~ "Zona 3",
+  grepl("Area 4_MT$|AREA IV$", markets, ignore.case = TRUE) ~ "Zona 4",
+  grepl("Area 5_MT$|AREA V$", markets, ignore.case = TRUE) ~ "Zona 5",
+  grepl("Area 6_MT$|AREA VI$", markets, ignore.case = TRUE) ~ "Zona 6",
+  TRUE ~ markets
+),
+    
+    # Estandarizar el formato de "tipo" a "Colas" y "Sabores"
+    tipo = case_when(
+      tipo %in% c("Colas", "COLA", "Cola") ~ "Colas",
+      TRUE ~ "Sabores"
+    )
+  )
+
+# Verificar los valores únicos después de la transformación
+bebidas_detalles %>%
+  dplyr::select(where(is.character)) %>%
+  map(~ unique(.x))
+```
+
+```{r}
+# Transformar la columna periodo a formato fecha
+bebidas_detalles <- bebidas_detalles %>%
+  mutate(periodo = as.Date(periodo, format = "%d/%m/%Y"))
+
+# Verificar el cambio
+str(bebidas_detalles$periodo)
+```
+
+```{r}
+bebidas_detalles <- bebidas_detalles %>%
+  mutate(
+    # Estandarizar los sabores a un conjunto reducido de categorías
+    `m.sabor` = case_when(
+      grepl("LIMA|LIMON|LIMONADA", `m.sabor`, ignore.case = TRUE) ~ "LIMON",
+      grepl("NARANJA|MANDARINA|MANDARINADA|ORANGE", `m.sabor`, ignore.case = TRUE) ~ "NARANJA",
+      grepl("MANZANA|MANZANITA|MANZANETO|MANZANITA CLASICA", `m.sabor`, ignore.case = TRUE) ~ "MANZANA",
+      grepl("TORONJA|TORONJITA", `m.sabor`, ignore.case = TRUE) ~ "TORONJA",
+      grepl("CEREZA|CHERRY", `m.sabor`, ignore.case = TRUE) ~ "CEREZA",
+      grepl("MORAS|BERRY|MORA", `m.sabor`, ignore.case = TRUE) ~ "MORA",
+      grepl("FRESA|FRAMBUEZA", `m.sabor`, ignore.case = TRUE) ~ "FRESA",
+      grepl("MANGO|MANGADA", `m.sabor`, ignore.case = TRUE) ~ "MANGO",
+      grepl("MARACUYA|MARULA", `m.sabor`, ignore.case = TRUE) ~ "MARACUYA",
+      grepl("ARANDANO", `m.sabor`, ignore.case = TRUE) ~ "ARANDANO",
+      grepl("SANDIA", `m.sabor`, ignore.case = TRUE) ~ "SANDIA",
+      grepl("UVA", `m.sabor`, ignore.case = TRUE) ~ "UVA",
+      grepl("GUAYABA", `m.sabor`, ignore.case = TRUE) ~ "GUAYABA",
+      grepl("DURAZNO|CHABACANO", `m.sabor`, ignore.case = TRUE) ~ "DURAZNO",
+      grepl("COCO", `m.sabor`, ignore.case = TRUE) ~ "COCO",
+      grepl("PINA|PIÑA", `m.sabor`, ignore.case = TRUE) ~ "PINA",
+      grepl("TAMARINDO", `m.sabor`, ignore.case = TRUE) ~ "TAMARINDO",
+      grepl("COLA", `m.sabor`, ignore.case = TRUE) ~ "COLA",
+      grepl("GROSELLA", `m.sabor`, ignore.case = TRUE) ~ "GROSELLA",
+      grepl("SIDRA", `m.sabor`, ignore.case = TRUE) ~ "SIDRA",
+      grepl("JAMAICA", `m.sabor`, ignore.case = TRUE) ~ "JAMAICA",
+      grepl("CITRUS|CITRICO", `m.sabor`, ignore.case = TRUE) ~ "CITRICO",
+      grepl("MULTISABOR|MIX|FRUTOS ROJOS|TUTI-FRUTI|PONCHE", `m.sabor`, ignore.case = TRUE) ~ "MIX",
+      grepl("BANANA", `m.sabor`, ignore.case = TRUE) ~ "BANANA",
+      grepl("RAIZ|GINGER|JENGIBRE", `m.sabor`, ignore.case = TRUE) ~ "RAIZ/GINGER",
+      grepl("PERA", `m.sabor`, ignore.case = TRUE) ~ "PERA",
+      grepl("MOJITO|PALOMA|GIN & TONIC", `m.sabor`, ignore.case = TRUE) ~ "COCTEL",
+      grepl("CEBADA|NEGRA", `m.sabor`, ignore.case = TRUE) ~ "MALTA",
+      grepl("LYCHEE|BERGAMOTA|MARULA|PITAYA|GRANADA|CIRUELA|GUARANA", `m.sabor`, ignore.case = TRUE) ~ "EXOTICO",
+      grepl("SIN SABOR", `m.sabor`, ignore.case = TRUE) ~ "SIN SABOR",
+      TRUE ~ `m.sabor`
+    ),
+    
+    # Categorizar el tipo de sabor con un enfoque más granular
+    tipo_sabor = case_when(
+      `m.sabor` %in% c("LIMON", "NARANJA", "TORONJA", "CITRICO") ~ "CITRICO",
+      `m.sabor` %in% c("FRESA", "FRAMBUESA", "ARANDANO", "SANDIA", 
+                       "UVA", "MELON", "DURAZNO", "MANZANA", "CEREZA", "GROSELLA", "JAMAICA", 
+                       "PERA", "GRANADA", "CIRUELA", "MORA") ~ "FRUTA",
+      `m.sabor` %in% c("BANANA", "MARACUYA", "MANGO", "COCO", "PINA", "GUAYABA") ~ "TROPICAL",
+      `m.sabor` %in% c("COLA", "CREAM SODA", "RAIZ/GINGER", "SIDRA") ~ "CLASICO",
+      `m.sabor` %in% c("MIX", "MULTISABOR", "FRUTOS ROJOS", "TUTI-FRUTI") ~ "MIX",
+      `m.sabor` %in% c("MOJITO", "PALOMA", "GIN & TONIC") ~ "COCTEL",
+      `m.sabor` %in% c("CEBADA", "NEGRA") ~ "MALTA",
+      `m.sabor` %in% c("TAMARINDO","LYCHEE", "BERGAMOTA", "EXOTICO") ~ "EXOTICO",
+      `m.sabor` == "SIN SABOR" ~ "SIN SABOR",
+      TRUE ~ "OTROS"
+    )
+  )
+
+# Verificar los valores únicos después de la estandarización
+bebidas_detalles %>%
+  dplyr::select(`m.sabor`, tipo_sabor) %>%
+  unique() %>%
+  arrange(`m.sabor`)
+```
+
+```{r}
+# Verificar los valores únicos después de la transformación
+bebidas_detalles %>%
+  dplyr::select(where(is.character)) %>%
+  map(~ unique(.x))
+```
+
 
 ### Exploration - BNA_DR
 
@@ -703,11 +942,678 @@ print(tasa_crecimiento)
 # Calcular la correlación entre el precio y las ventas para cada combinación de canal y tipo
 correlacion_precio_ventas <- BNA_DR %>%
   group_by(canal, tipo) %>%
-  summarise(correlacion = cor(precio_unds, ventas_unds, use = "complete.obs"), .groups = "drop")
+  summarise(correlacion = cor(dist_num, ventas_unds, use = "complete.obs"), .groups = "drop")
 
 # Mostrar los resultados de la correlación
 print(correlacion_precio_ventas)
 ```
 
 
+```{r}
+# Calcular el promedio de ventas_unds por market, tipo y presentacion
+data_grafico <- bebidas_detalles %>%
+  group_by(markets, tipo, m.presentacion) %>%
+  summarise(promedio_ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Obtener los valores únicos de m.presentacion
+presentaciones <- unique(data_grafico$m.presentacion)
+
+# Crear una lista de gráficos, uno para cada m.presentacion
+plots <- map(presentaciones, function(presentacion_actual) {
+  
+  ggplot(data_grafico %>% filter(m.presentacion == presentacion_actual), 
+         aes(x = markets, y = promedio_ventas_unds, fill = tipo)) +
+    geom_bar(stat = "identity", position = "stack", color = "white") +
+    labs(
+      title = paste("Ventas por Mercado y Tipo -", presentacion_actual),
+      x = "Mercado",
+      y = "Ventas (unds)",
+      fill = "Tipo"
+    ) +
+    theme_minimal(base_size = 14, base_family = "Georgia") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333")
+    ) +
+    scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+    scale_fill_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17"))
+})
+
+# Mostrar cada gráfico individualmente
+plots
+```
+
+```{r}
+# Calcular el promedio de ventas_unds por market, tipo y canal
+data_grafico <- bebidas_detalles %>%
+  group_by(markets, tipo, canal) %>%
+  summarise(promedio_ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Obtener los valores únicos de canal
+canales <- unique(data_grafico$canal)
+
+# Crear una lista de gráficos, uno para cada canal
+plots <- map(canales, function(canal_actual) {
+  
+  ggplot(data_grafico %>% filter(canal == canal_actual), 
+         aes(x = markets, y = promedio_ventas_unds, fill = tipo)) +
+    geom_bar(stat = "identity", position = "stack", color = "white") +
+    labs(
+      title = paste("Ventas por Mercado y Tipo - Canal:", canal_actual),
+      x = "Mercado",
+      y = "Ventas (unds)",
+      fill = "Tipo"
+    ) +
+    theme_minimal(base_size = 14, base_family = "Georgia") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333")
+    ) +
+    scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+    scale_fill_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17"))
+})
+
+# Mostrar cada gráfico individualmente
+plots
+```
+
+```{r}
+# Filtrar solo para "Sabores" y calcular el promedio de ventas_unds por market, tipo_sabor y canal
+data_grafico <- bebidas_detalles %>%
+  filter(tipo == "Sabores") %>%
+  group_by(markets, tipo_sabor, canal) %>%
+  summarise(promedio_ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Obtener los valores únicos de canal
+canales <- unique(data_grafico$canal)
+
+# Crear una lista de gráficos, uno para cada canal
+plots <- map(canales, function(canal_actual) {
+  
+  ggplot(data_grafico %>% filter(canal == canal_actual), 
+         aes(x = markets, y = promedio_ventas_unds, fill = tipo_sabor)) +
+    geom_bar(stat = "identity", position = "stack", color = "white") +
+    labs(
+      title = paste("Ventas de Sabores por Mercado - Canal:", canal_actual),
+      x = "Mercado",
+      y = "Ventas (unds)",
+      fill = "Tipo de Sabor"
+    ) +
+    theme_minimal(base_size = 14, base_family = "Georgia") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333")
+    ) +
+    scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+    scale_fill_brewer(palette = "Set3")
+})
+
+# Mostrar cada gráfico individualmente
+plots
+```
+
+```{r}
+# Filtrar solo "Sabores" y agregar columnas de año y semestre
+data_grafico <- bebidas_detalles %>%
+  filter(tipo == "Sabores") %>%
+  mutate(
+    anio = format(periodo, "%Y"),
+    semestre = ifelse(format(periodo, "%m") %in% c("01", "02", "03", "04", "05", "06"), "S1", "S2")
+  ) %>%
+  group_by(anio, semestre, periodo, tipo_sabor) %>%
+  summarise(promedio_ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Crear la gráfica de líneas por año, semestre y tipo_sabor
+ggplot(data_grafico, aes(x = periodo, y = promedio_ventas_unds, color = tipo_sabor, group = interaction(tipo_sabor, anio, semestre))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  labs(
+    title = "Desempeño de Sabores por Tipo y Año",
+    x = "Periodo",
+    y = "Ventas (unds)",
+    color = "Tipo de Sabor"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333")
+  ) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  scale_x_date(date_labels = "%b %y", date_breaks = "6 months")
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+# Función para crear el gráfico filtrando por tipo_sabor específico
+plot_sabor_desempeno <- function(tipo_sabor_filtro, color_titulo) {
+  data_grafico <- bebidas_detalles %>%
+    filter(tipo == "Sabores", tipo_sabor == tipo_sabor_filtro) %>%
+    mutate(
+      anio = format(periodo, "%Y"),
+      semestre = ifelse(format(periodo, "%m") %in% c("01", "02", "03", "04", "05", "06"), "S1", "S2")
+    ) %>%
+    group_by(anio, semestre, periodo, m.sabor) %>%
+    summarise(promedio_ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+  ggplot(data_grafico, aes(x = periodo, y = promedio_ventas_unds, color = m.sabor, group = interaction(m.sabor, anio, semestre))) +
+    geom_line(size = 1.2) +
+    geom_point(size = 3) +
+    labs(
+      title = paste("Desempeño de Sabores", tipo_sabor_filtro, "por Sabor"),
+      x = "Periodo",
+      y = "Ventas (unds)",
+      color = "Sabor"
+    ) +
+    theme_minimal(base_size = 14, base_family = "Georgia") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = color_titulo),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333"),
+      legend.position = "bottom",
+      legend.text = element_text(size = 10)
+    ) +
+    scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+    scale_x_date(date_labels = "%b %y", date_breaks = "6 months")
+}
+
+# Gráfico para CITRICO
+plot_citrico <- plot_sabor_desempeno("CITRICO", "#ef5f17")
+
+# Gráfico para FRUTA
+plot_fruta <- plot_sabor_desempeno("FRUTA", "#2c6df6")
+
+# Mostrar los gráficos
+plot_citrico
+plot_fruta
+```
+
+```{r}
+# Sabores específicos a graficar
+sabores_especificos <- c("MANZANA", "LIMON", "NARANJA", "TORONJA", "FRESA")
+
+# Filtrar los datos para los sabores específicos y calcular el promedio de ventas por periodo
+data_grafico <- bebidas_detalles %>%
+  filter(tipo == "Sabores", `m.sabor` %in% sabores_especificos) %>%
+  mutate(
+    anio = format(periodo, "%Y"),
+    semestre = ifelse(format(periodo, "%m") %in% c("01", "02", "03", "04", "05", "06"), "S1", "S2")
+  ) %>%
+  group_by(anio, semestre, periodo, `m.sabor`) %>%
+  summarise(promedio_ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Colores personalizados para cada sabor
+colores_sabores <- c(
+  "MANZANA" = "#03a577ff",   # Rojo
+  "LIMON" = "#ffb500ff",     # Verde
+  "NARANJA" = "#ca5113ff",   # Naranja
+  "TORONJA" = "#83304eff",   # Morado
+  "FRESA" = "#cb4b7aff"      # Fresa
+)
+
+# Crear la gráfica de líneas
+ggplot(data_grafico, aes(x = periodo, y = promedio_ventas_unds, color = `m.sabor`, group = `m.sabor`)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 3) +
+  labs(
+    title = "Desempeño de Top 5 Sabores a lo Largo del Tiempo",
+    x = "Periodo",
+    y = "Ventas (unds)",
+    color = "Sabor"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "bottom",
+    legend.text = element_text(size = 10)
+  ) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  scale_x_date(date_labels = "%b %y", date_breaks = "6 months") +
+  scale_color_manual(values = colores_sabores)
+```
+
+```{r}
+# Calcular el porcentaje de productos para los sabores seleccionados
+sabores_especificos <- c("MANZANA", "LIMON", "NARANJA", "TORONJA", "FRESA")
+
+data_grafico <- bebidas_detalles %>%
+  filter(m.sabor %in% sabores_especificos) %>%
+  group_by(m.sabor) %>%
+  summarise(total_productos = n(), .groups = "drop") %>%
+  mutate(porcentaje = total_productos / sum(total_productos) * 100)
+
+# Definir colores personalizados
+colores_sabores <- c(
+  "MANZANA" = "#03a577ff",
+  "LIMON" = "#ffb500ff",
+  "NARANJA" = "#ca5113ff",
+  "TORONJA" = "#83304eff",
+  "FRESA" = "#cb4b7aff"
+)
+
+# Crear la gráfica de pastel
+ggplot(data_grafico, aes(x = "", y = porcentaje, fill = m.sabor)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0) +
+  labs(
+    title = "Distribución de Productos por Sabor (Solo los 5 principales)",
+    fill = "Sabor"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5, color = "#333333"),
+    legend.position = "right"
+  ) +
+  scale_fill_manual(values = colores_sabores) +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")), 
+            position = position_stack(vjust = 0.5), size = 5, color = "white")
+```
+
+
+```{r}
+# Calcular el promedio de ventas_unds por market y tipo
+data_grafico <- BNA_DR %>%
+  group_by(markets, tipo) %>%
+  summarise(promedio_ventas_unds = mean(ventas_unds, na.rm = TRUE), .groups = "drop")
+
+# Crear la gráfica de barras apiladas
+ggplot(data_grafico, aes(x = markets, y = promedio_ventas_unds, fill = tipo)) +
+  geom_bar(stat = "identity", position = "stack", color = "white") +
+  labs(
+    title = "Promedio de Ventas por Mercado y Tipo",
+    x = "Mercado",
+    y = "Promedio de Ventas (unds)",
+    fill = "Tipo"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333")
+  ) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  scale_fill_manual(values = c("Colas" = "#2c6df6", "Sabores" = "#ef5f17"))
+```
+
+
 ### Propuestas de Pronostico 
+
+```{r}
+# Filtrar datos solo para sabor "Fresa" y sumar ventas por periodo
+fresa_ts <- bebidas_detalles %>%
+  filter(m.sabor == "FRESA") %>%
+  group_by(periodo) %>%
+  summarise(ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Convertir periodo a Date
+fresa_ts$periodo <- as.Date(fresa_ts$periodo, format = "%d/%m/%Y")
+
+# Prueba de estacionariedad Dickey-Fuller
+adf_test_fresa <- adf.test(fresa_ts$ventas_unds, alternative = "stationary")
+print(adf_test_fresa)
+```
+
+```{r}
+# Convertir a serie temporal
+fresa_series <- ts(fresa_ts$ventas_unds, frequency = 12, start = c(as.numeric(format(min(fresa_ts$periodo), "%Y")), as.numeric(format(min(fresa_ts$periodo), "%m"))))
+
+# Ajustar modelo SARIMA automáticamente
+sarima_fresa <- auto.arima(fresa_series, seasonal = TRUE)
+
+# Generar predicciones para los próximos 12 meses
+forecast_fresa <- forecast(sarima_fresa, h = 12)
+
+# Imprimir resumen del modelo
+summary(sarima_fresa)
+```
+
+```{r}
+# Extraer fechas y convertir a dataframe
+periodos_futuro <- seq(max(fresa_ts$periodo) + 1, by = "month", length.out = 12)
+
+predicciones_fresa <- data.frame(
+  periodo = periodos_futuro,
+  ventas_unds = as.numeric(forecast_fresa$mean),
+  lower_80 = as.numeric(forecast_fresa$lower[,1]),
+  upper_80 = as.numeric(forecast_fresa$upper[,1]),
+  lower_95 = as.numeric(forecast_fresa$lower[,2]),
+  upper_95 = as.numeric(forecast_fresa$upper[,2]),
+  anio = "Predicción",
+  mes = format(periodos_futuro, "%m")
+)
+
+# Agregar columna de año y mes a los datos históricos
+fresa_ts <- fresa_ts %>%
+  mutate(
+    anio = format(periodo, "%Y"),
+    mes = format(periodo, "%m")
+  )
+
+# Generar escala de grises para los años pasados
+anios_historicos <- unique(fresa_ts$anio)
+escala_grises <- scales::seq_gradient_pal("lightgrey", "black", "Lab")(seq(0, 1, length.out = length(anios_historicos)))
+names(escala_grises) <- anios_historicos
+```
+
+```{r}
+ggplot() +
+  # Datos históricos con líneas en tonos de gris
+  geom_line(data = fresa_ts, aes(x = as.numeric(mes), y = ventas_unds, group = anio, color = anio), size = 1, alpha = 0.6) +
+  scale_color_manual(values = escala_grises, guide = "none") +
+  
+  # Pronóstico con línea sólida en color destacado
+  geom_line(data = predicciones_fresa, aes(x = as.numeric(mes), y = ventas_unds), color = "#cb4b7aff", size = 1.5, linetype = "solid") +
+  
+  # Intervalos de confianza
+  geom_ribbon(data = predicciones_fresa, aes(x = as.numeric(mes), ymin = lower_80, ymax = upper_80), fill = "#cb4b7aff", alpha = 0.2) +
+  geom_ribbon(data = predicciones_fresa, aes(x = as.numeric(mes), ymin = lower_95, ymax = upper_95), fill = "#cb4b7aff", alpha = 0.1) +
+  
+  # Etiquetas y tema
+  labs(
+    title = "Pronóstico de Ventas de Fresa - Year over Year",
+    x = "Mes",
+    y = "Ventas (Millones de Unidades)"
+  ) +
+  
+  # Personalización del tema
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333")
+  ) +
+  
+  # Formato del eje Y en millones y eje X en meses
+  scale_y_continuous(labels = scales::label_number(scale = 1e-6, suffix = "M")) +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  
+  # Límites del eje X
+  expand_limits(x = c(1, 12))
+```
+
+```{r message=FALSE, warning=FALSE}
+library(plm)
+library(panelvar)
+library(vars)
+
+# Filter for the selected flavors
+sabores_seleccionados <- c("MANZANA", "LIMON", "NARANJA", "TORONJA", "FRESA")
+
+panel_data <- bebidas_detalles %>%
+  filter(m.sabor %in% sabores_seleccionados) %>%
+  group_by(m.sabor, periodo) %>%
+  summarise(
+    ventas_individual = sum(vtas_unds[m.presentacion == "INDIVIDUAL"], na.rm = TRUE),
+    ventas_pack = sum(vtas_unds[m.presentacion == "PACK"], na.rm = TRUE),
+    ventas_multipack = sum(vtas_unds[m.presentacion == "MULTI-PACK"], na.rm = TRUE),
+    dist_num = mean(dist_num, na.rm = TRUE),  # Distribution variable
+    .groups = "drop"
+  ) 
+
+# Convert period to Date and order the data
+panel_data$periodo <- as.Date(panel_data$periodo, format = "%d/%m/%Y")
+panel_data <- panel_data %>% arrange(m.sabor, periodo)
+
+# Convert to panel data format
+panel_data <- pdata.frame(panel_data, index = c("m.sabor", "periodo"))
+```
+
+```{r}
+# Define the variables to use in the Panel VAR model
+variables_panel <- c("ventas_individual", "ventas_pack", "ventas_multipack", "dist_num")
+
+# Estimate Panel VAR using GMM
+modelo_pvar <- pvargmm(
+  dependent_vars = variables_panel,
+  lags = 1,  # One lag
+  transformation = "fod",  # First-order differences to deal with unit roots
+  data = panel_data,
+  panel_identifier = c("m.sabor", "periodo"),
+  steps = c("twostep")  # Two-step GMM estimation
+)
+
+# Summary of the Panel VAR model
+summary(modelo_pvar)
+```
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(strucchange)
+library(ggplot2)
+
+# Define flavors to analyze
+flavors <- c("LIMON", "TORONJA", "MANZANA", "NARANJA")
+
+# Filter data for the selected flavors
+data_flavors <- bebidas_detalles %>%
+  filter(m.sabor %in% flavors) %>%
+  group_by(periodo, m.sabor) %>%
+  summarise(ventas_unds = sum(vtas_unds, na.rm = TRUE), .groups = "drop")
+
+# Convert period to Date format
+data_flavors$periodo <- as.Date(data_flavors$periodo, format = "%d/%m/%Y")
+
+# Store results
+breakpoints_results <- list()
+
+# Loop through each flavor and apply structural break test
+for (sabor in flavors) {
+  
+  # Subset data for the specific flavor
+  series <- data_flavors %>%
+    filter(m.sabor == sabor) %>%
+    arrange(periodo)
+  
+  # Convert to time series
+  ts_series <- ts(series$ventas_unds, frequency = 12, 
+                  start = c(as.numeric(format(min(series$periodo), "%Y")), 
+                            as.numeric(format(min(series$periodo), "%m"))))
+  
+  # Apply Bai-Perron test for multiple structural breaks
+  bp_model <- breakpoints(ts_series ~ 1, h = 5) # h = Minimum segment size
+  
+  # Get breakpoints dates
+  if (length(bp_model$breakpoints) > 0) {
+    cambios <- series$periodo[bp_model$breakpoints]
+  } else {
+    cambios <- NA
+  }
+  
+  # Store results
+  breakpoints_results[[sabor]] <- data.frame(
+    sabor = sabor,
+    cambios = cambios
+  )
+}
+
+# Combine all results
+df_breakpoints <- bind_rows(breakpoints_results)
+
+# Display detected breakpoints
+print(df_breakpoints)
+
+# Plot breakpoints on time series
+ggplot(data_flavors, aes(x = periodo, y = ventas_unds, color = m.sabor)) +
+  geom_line(size = 1.2) +
+  
+  # Add breakpoints as vertical lines
+  geom_vline(data = df_breakpoints, aes(xintercept = as.numeric(cambios), color = sabor), 
+             linetype = "dashed", size = 1.2) +
+  
+  labs(
+    title = "Structural Break Analysis for LIMON, TORONJA, MANZANA & NARANJA",
+    x = "Period",
+    y = "Sales (Units)",
+    color = "Flavor"
+  ) +
+  
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "bottom"
+  ) +
+  
+  scale_x_date(date_labels = "%b %y", date_breaks = "6 months")
+```
+
+```{r}
+# Crear función para calcular CAGR (Tasa de Crecimiento Anual Compuesta)
+cagr <- function(valor_inicial, valor_final, años) {
+  if (años > 0) {
+    return ((valor_final / valor_inicial)^(1 / años) - 1) * 100
+  } else {
+    return(NA)
+  }
+}
+
+# Unir los datos de ventas con los puntos de cambio estructural
+data_cambios <- left_join(data_flavors, df_breakpoints, by = c("m.sabor" = "sabor"))
+
+# Crear un dataframe con tasas de crecimiento antes y después de los cambios
+cagr_results <- data_cambios %>%
+  group_by(m.sabor) %>%
+  arrange(periodo) %>%
+  mutate(
+    cambio_detectado = ifelse(periodo %in% cambios, 1, 0),
+    grupo_cambio = cumsum(cambio_detectado)
+  ) %>%
+  group_by(m.sabor, grupo_cambio) %>%
+  summarise(
+    fecha_inicio = min(periodo),
+    fecha_fin = max(periodo),
+    ventas_inicio = first(ventas_unds),
+    ventas_fin = last(ventas_unds),
+    años = as.numeric(difftime(fecha_fin, fecha_inicio, units = "days")) / 365,
+    tasa_crecimiento = cagr(ventas_inicio, ventas_fin, años),
+    .groups = "drop"
+  )
+
+# Mostrar los resultados del crecimiento antes y después de los cambios
+print(cagr_results)
+```
+
+```{r}
+# Gráfico de evolución de la tasa de crecimiento antes y después de cada cambio estructural
+ggplot(cagr_results, aes(x = fecha_fin, y = tasa_crecimiento, color = m.sabor, group = m.sabor)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  
+  labs(
+    title = "Evolución de la Tasa de Crecimiento Antes y Después de Cambios Estructurales",
+    x = "Periodo Final",
+    y = "Tasa de Crecimiento (%)",
+    color = "Sabor"
+  ) +
+  
+  theme_minimal(base_size = 14, base_family = "Georgia") +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, color = "#333333"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "top"
+  ) +
+  
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "6 months")
+```
+
+```{r}
+# Cargar librerías
+library(ggplot2)
+library(dplyr)
+library(scales)
+
+# Suponiendo que `df_breakpoints` tiene los puntos de cambio estructural
+# Crear una base simulada de datos de ventas por sabor
+set.seed(123)
+df_ventas <- data.frame(
+  periodo = seq.Date(from = as.Date("2022-01-01"), by = "month", length.out = 36),
+  LIMON = c(seq(100, 120, length.out = 12), seq(120, 90, length.out = 12), seq(90, 130, length.out = 12)),
+  MANZANA = c(seq(80, 100, length.out = 12), seq(100, 70, length.out = 12), seq(70, 110, length.out = 12)),
+  NARANJA = c(seq(90, 110, length.out = 12), seq(110, 130, length.out = 12), seq(130, 160, length.out = 12)),
+  TORONJA = c(seq(120, 140, length.out = 12), seq(140, 100, length.out = 12), seq(100, 90, length.out = 12))
+)
+
+# Transformar a formato largo para ggplot
+df_long <- df_ventas %>%
+  tidyr::pivot_longer(cols = -periodo, names_to = "Sabor", values_to = "Ventas")
+
+# Suponiendo que `df_breakpoints` contiene los cambios estructurales
+df_breakpoints <- data.frame(
+  cambios = as.Date(c("2023-01-01", "2024-01-01"))
+)
+
+# Graficar ventas con sombreado en los cambios estructurales
+ggplot(df_long, aes(x = periodo, y = Ventas, color = Sabor, group = Sabor)) +
+  geom_line(size = 1.2) +
+  
+  # Agregar sombreado en los cambios estructurales
+  geom_rect(data = df_breakpoints, aes(xmin = cambios, xmax = cambios + 365, ymin = -Inf, ymax = Inf), 
+            inherit.aes = FALSE, fill = "gray", alpha = 0.2) +
+  
+  labs(title = "Evolución de Ventas con Cambios Estructurales Destacados",
+       x = "Periodo", y = "Ventas (Miles de Unidades)", color = "Sabor") +
+  
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("LIMON" = "#ff6f61", "MANZANA" = "#6a994e", 
+                                "NARANJA" = "#0081a7", "TORONJA" = "#bc6c25")) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "6 months") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Cargar librerías necesarias
+library(MSwM)
+
+# Convertir a serie temporal
+ventas_ts <- ts(df_ventas$NARANJA, frequency = 12, start = c(2022, 1))
+
+# Ajustar modelo AR(1) con Markov Switching
+modelo_msm <- msmFit(lm(ventas_ts ~ 1), k = 2, sw = c(TRUE, TRUE))
+
+# Resumen del modelo
+summary(modelo_msm)
+
+# Graficar probabilidades de estar en cada régimen
+plotProb(modelo_msm)
+```
+
